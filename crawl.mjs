@@ -351,6 +351,20 @@ const NO_ARTIST_TEMPLATES = [
   'What the K-Pop World Is Talking About This Week',
   'An Editor\'s View: Trends Worth Watching in K-Pop',
   'The Quiet Shifts Reshaping K-Pop This Week',
+  'Industry Currents: Reading Between the Headlines',
+  'The K-Pop Digest: Observations and Analysis',
+  'A Considered Look at This Week\'s K-Pop News',
+  'Between the Lines: What K-Pop Headlines Miss',
+  'The Editorial Desk: K-Pop Stories That Matter',
+  'Reflections on a Week in K-Pop Culture',
+  'The Long View: K-Pop Trends Worth Tracking',
+  'From the Newsroom: K-Pop Developments in Focus',
+  'Signals and Noise: Parsing This Week\'s K-Pop News',
+  'The CHRONICLE Briefing: Essential K-Pop Reading',
+  'A Pause for Thought: The Week in K-Pop Review',
+  'What We Noticed: K-Pop Observations This Week',
+  'The Weekly Reckoning: K-Pop in Perspective',
+  'Marginalia: Notes from the K-Pop World',
 ];
 
 // ============================================================
@@ -457,17 +471,54 @@ function classifyTopic(title) {
   return 'general';
 }
 
+// ---- Title deduplication tracker ----
+const _usedTitles = new Set();
+
 function rewriteTitle(originalTitle, source) {
   const artist = extractArtist(originalTitle);
   const topic = classifyTopic(originalTitle);
 
   if (artist) {
     const templates = TITLE_TEMPLATES[topic] || TITLE_TEMPLATES.general;
-    const template = pickRandom(templates);
-    return template.replace(/\{artist\}/g, artist);
+    // Try all templates before falling back
+    const shuffled = [...templates].sort(() => Math.random() - 0.5);
+    for (const template of shuffled) {
+      const candidate = template.replace(/\{artist\}/g, artist);
+      if (!_usedTitles.has(candidate)) {
+        _usedTitles.add(candidate);
+        return candidate;
+      }
+    }
+    // All topic templates used -- try other topics
+    for (const [otherTopic, otherTemplates] of Object.entries(TITLE_TEMPLATES)) {
+      if (otherTopic === topic) continue;
+      for (const template of otherTemplates) {
+        const candidate = template.replace(/\{artist\}/g, artist);
+        if (!_usedTitles.has(candidate)) {
+          _usedTitles.add(candidate);
+          return candidate;
+        }
+      }
+    }
+    // Last resort: append source for uniqueness
+    const fallback = `${pickRandom(templates).replace(/\{artist\}/g, artist)} (via ${source})`;
+    _usedTitles.add(fallback);
+    return fallback;
   }
 
-  return pickRandom(NO_ARTIST_TEMPLATES);
+  // No artist -- try all NO_ARTIST_TEMPLATES
+  const shuffledNA = [...NO_ARTIST_TEMPLATES].sort(() => Math.random() - 0.5);
+  for (const candidate of shuffledNA) {
+    if (!_usedTitles.has(candidate)) {
+      _usedTitles.add(candidate);
+      return candidate;
+    }
+  }
+  // All used -- generate unique variant
+  const base = pickRandom(NO_ARTIST_TEMPLATES);
+  const unique = `${base} (${source})`;
+  _usedTitles.add(unique);
+  return unique;
 }
 
 function pickRandom(arr) {
@@ -514,6 +565,8 @@ async function downloadArticleImages(articles) {
   log('Downloading article images locally...');
   let downloaded = 0;
   const BATCH = 8;
+
+  // Phase 1: Download real (non-picsum) images
   for (let i = 0; i < articles.length; i += BATCH) {
     const batch = articles.slice(i, i + BATCH);
     await Promise.allSettled(
@@ -529,16 +582,59 @@ async function downloadArticleImages(articles) {
       })
     );
   }
-  log(`  Downloaded ${downloaded}/${articles.length} images locally`);
+  log(`  Phase 1: Downloaded ${downloaded} real images locally`);
+
+  // Phase 2: Download picsum fallback images for articles that still use external URLs
+  let picsumDownloaded = 0;
+  for (let i = 0; i < articles.length; i += BATCH) {
+    const batch = articles.slice(i, i + BATCH);
+    await Promise.allSettled(
+      batch.map(async (article, idx) => {
+        if (!article.image || !article.image.includes('picsum.photos')) return;
+        if (article.image.startsWith('images/')) return;
+        const safeName = `article-${i + idx}-picsum-${Date.now() % 100000}`;
+        const localPath = await downloadImage(article.image, safeName);
+        if (localPath) {
+          article.originalImage = article.image;
+          article.image = localPath;
+          picsumDownloaded++;
+        }
+      })
+    );
+  }
+  log(`  Phase 2: Downloaded ${picsumDownloaded} picsum fallback images locally`);
+  log(`  Total: ${downloaded + picsumDownloaded} images locally`);
 }
 
 // ============================================================
 // RSS Feed Parsing
 // ============================================================
 
+// ---- Content filtering: exclude non-K-pop items ----
+const NON_KPOP_KEYWORDS = [
+  'esports', 'esport', 'e-sports', 'gaming', 'gamer', 'valorant', 'league of legends',
+  'overwatch', 'fortnite', 'counter-strike', 'csgo', 'cs2', 'dota', 'pubg',
+  'minecraft', 'call of duty', 'warzone', 'apex legends', 'twitch', 'streamer',
+  'cheating', 'tournament', 'fps', 'moba', 'battle royale', 'dexerto',
+  'nfl', 'nba', 'mlb', 'soccer', 'football', 'baseball', 'basketball',
+  'formula 1', 'f1', 'ufc', 'boxing', 'wrestling', 'wwe',
+  'cryptocurrency', 'bitcoin', 'ethereum', 'nft', 'blockchain',
+  'politics', 'election', 'trump', 'biden', 'congress', 'senate',
+];
+
+function isKpopRelated(title, description, categories) {
+  const combined = `${title} ${description} ${categories.join(' ')}`.toLowerCase();
+  // Check for non-kpop keywords
+  for (const kw of NON_KPOP_KEYWORDS) {
+    if (combined.includes(kw)) return false;
+  }
+  return true;
+}
+
 function parseRssFeed(xml, sourceName) {
   const items = extractItems(xml);
   const articles = [];
+  let filtered = 0;
   for (const item of items) {
     const title = decodeHtmlEntities(stripHtml(extractTag(item, 'title')));
     const link = extractTag(item, 'link');
@@ -552,6 +648,14 @@ function parseRssFeed(xml, sourceName) {
     if (!image) image = extractImageFromContent(contentEncoded);
     if (!image) image = extractImageFromContent(description);
     if (!title || !link) continue;
+
+    // Filter out non-K-pop content
+    const descText = stripHtml(decodeHtmlEntities(description || ''));
+    if (!isKpopRelated(title, descText, categories)) {
+      filtered++;
+      continue;
+    }
+
     articles.push({
       title,
       link,
@@ -565,6 +669,7 @@ function parseRssFeed(xml, sourceName) {
       articleContent: null,
     });
   }
+  if (filtered > 0) log(`    Filtered out ${filtered} non-K-pop items from ${sourceName}`);
   return articles;
 }
 
@@ -930,20 +1035,35 @@ function rewriteArticleBody(articleContent, title) {
   const targetParagraphs = Math.max(8, Math.min(12, originalLength || 8));
   const inlineImages = (articleContent?.images || []).slice(1, 4);
   const paragraphs = [];
+  const usedTexts = new Set();
+  const pickUnique = (arr) => {
+    const available = arr.filter(t => !usedTexts.has(t));
+    if (available.length === 0) return arr[Math.floor(Math.random() * arr.length)];
+    const picked = available[Math.floor(Math.random() * available.length)];
+    usedTexts.add(picked);
+    return picked;
+  };
+  const shuffleAndPickUnique = (arr, n) => {
+    const available = arr.filter(t => !usedTexts.has(t));
+    const shuffled = [...available].sort(() => Math.random() - 0.5);
+    const picked = shuffled.slice(0, Math.min(n, shuffled.length));
+    for (const p of picked) usedTexts.add(p);
+    return picked;
+  };
 
   if (artist) {
     const templates = BODY_TEMPLATES[topic] || BODY_TEMPLATES.general;
     const sub = (text) => text.replace(/\{artist\}/g, artist);
 
-    paragraphs.push({ type: 'intro', text: sub(pickRandom(templates.opening)) });
+    paragraphs.push({ type: 'intro', text: sub(pickUnique(templates.opening)) });
 
     const bgCount = targetParagraphs >= 10 ? 2 : 1;
-    for (const bg of shuffleAndPick(SHARED_PARAGRAPHS.background, bgCount)) {
+    for (const bg of shuffleAndPickUnique(SHARED_PARAGRAPHS.background, bgCount)) {
       paragraphs.push({ type: 'body', text: sub(bg) });
     }
 
     const analysisCount = targetParagraphs >= 10 ? 3 : 2;
-    for (const a of shuffleAndPick(templates.analysis, analysisCount)) {
+    for (const a of shuffleAndPickUnique(templates.analysis, analysisCount)) {
       paragraphs.push({ type: 'body', text: sub(a) });
     }
 
@@ -952,12 +1072,12 @@ function rewriteArticleBody(articleContent, title) {
     }
 
     const detailCount = targetParagraphs >= 10 ? 2 : 1;
-    for (const d of shuffleAndPick(SHARED_PARAGRAPHS.detail, detailCount)) {
+    for (const d of shuffleAndPickUnique(SHARED_PARAGRAPHS.detail, detailCount)) {
       paragraphs.push({ type: 'body', text: sub(d) });
     }
 
     const reactionCount = targetParagraphs >= 10 ? 2 : 1;
-    for (const r of shuffleAndPick(SHARED_PARAGRAPHS.reaction, reactionCount)) {
+    for (const r of shuffleAndPickUnique(SHARED_PARAGRAPHS.reaction, reactionCount)) {
       paragraphs.push({ type: 'body', text: sub(r) });
     }
 
@@ -965,30 +1085,30 @@ function rewriteArticleBody(articleContent, title) {
       paragraphs.push({ type: 'image', src: inlineImages[1] });
     }
 
-    paragraphs.push({ type: 'body', text: sub(pickRandom(SHARED_PARAGRAPHS.impact)) });
-    paragraphs.push({ type: 'closing', text: sub(pickRandom(templates.closing)) });
+    paragraphs.push({ type: 'body', text: sub(pickUnique(SHARED_PARAGRAPHS.impact)) });
+    paragraphs.push({ type: 'closing', text: sub(pickUnique(templates.closing)) });
   } else {
-    paragraphs.push({ type: 'intro', text: pickRandom(NO_ARTIST_BODY.opening) });
-    for (const bg of shuffleAndPick(SHARED_PARAGRAPHS.noArtist.background, 2)) {
+    paragraphs.push({ type: 'intro', text: pickUnique(NO_ARTIST_BODY.opening) });
+    for (const bg of shuffleAndPickUnique(SHARED_PARAGRAPHS.noArtist.background, 2)) {
       paragraphs.push({ type: 'body', text: bg });
     }
-    for (const a of shuffleAndPick(NO_ARTIST_BODY.analysis, 2)) {
+    for (const a of shuffleAndPickUnique(NO_ARTIST_BODY.analysis, 2)) {
       paragraphs.push({ type: 'body', text: a });
     }
     if (inlineImages.length > 0) {
       paragraphs.push({ type: 'image', src: inlineImages[0] });
     }
-    for (const d of shuffleAndPick(SHARED_PARAGRAPHS.noArtist.detail, 2)) {
+    for (const d of shuffleAndPickUnique(SHARED_PARAGRAPHS.noArtist.detail, 2)) {
       paragraphs.push({ type: 'body', text: d });
     }
-    for (const r of shuffleAndPick(SHARED_PARAGRAPHS.noArtist.reaction, 1)) {
+    for (const r of shuffleAndPickUnique(SHARED_PARAGRAPHS.noArtist.reaction, 1)) {
       paragraphs.push({ type: 'body', text: r });
     }
     if (inlineImages.length > 1) {
       paragraphs.push({ type: 'image', src: inlineImages[1] });
     }
-    paragraphs.push({ type: 'body', text: pickRandom(SHARED_PARAGRAPHS.noArtist.impact) });
-    paragraphs.push({ type: 'closing', text: pickRandom(NO_ARTIST_BODY.closing) });
+    paragraphs.push({ type: 'body', text: pickUnique(SHARED_PARAGRAPHS.noArtist.impact) });
+    paragraphs.push({ type: 'closing', text: pickUnique(NO_ARTIST_BODY.closing) });
   }
 
   return { paragraphs };
@@ -1010,21 +1130,25 @@ function shuffleAndPick(arr, n) {
 // ============================================================
 
 function backdateArticles(articles) {
-  const startDate = new Date(2026, 0, 1); // Jan 1, 2026
   const endDate = new Date(2026, 2, 22);  // Mar 22, 2026
-  const totalDays = Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24));
+  const totalDays = 80; // ~Jan 1 to Mar 22
 
+  // Sort articles so that the first articles (index 0) get the MOST RECENT dates
+  // and later articles get older dates. This ensures hero/top picks are recent.
   for (let i = 0; i < articles.length; i++) {
-    const dayOffset = Math.floor((i / articles.length) * totalDays);
-    const articleDate = new Date(startDate);
-    articleDate.setDate(articleDate.getDate() + dayOffset);
-    // Add some hour randomness
-    articleDate.setHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60));
+    // Linear spread: article 0 = most recent, last article = oldest
+    const fraction = i / Math.max(articles.length - 1, 1);
+    const daysAgo = Math.floor(fraction * totalDays) + Math.floor(Math.random() * 3);
+    const articleDate = new Date(endDate);
+    articleDate.setDate(articleDate.getDate() - daysAgo);
+    articleDate.setHours(8 + Math.floor(Math.random() * 14), Math.floor(Math.random() * 60));
     articles[i].pubDate = articleDate;
     articles[i].formattedDate = `${MONTH_NAMES[articleDate.getMonth()]} ${articleDate.getDate()}, ${articleDate.getFullYear()}`;
   }
 
-  log(`  Backdated ${articles.length} articles (Jan 1 - Mar 22, 2026)`);
+  // Re-sort newest first
+  articles.sort((a, b) => b.pubDate.getTime() - a.pubDate.getTime());
+  log(`  Backdated ${articles.length} articles (Jan 1 - Mar 22, 2026, spread evenly)`);
 }
 
 // ============================================================
@@ -1061,11 +1185,40 @@ function imgTagForArticle(article, width, height, loading = 'lazy') {
 // Card generators for index page sections
 // ============================================================
 
+// ---- Unique excerpt generation to avoid identical fallback text ----
+const EDITORIAL_EXCERPTS = [
+  'An essay exploring the deeper currents beneath the surface of the K-pop industry.',
+  'A measured look at the forces shaping K-pop\'s trajectory in 2026.',
+  'CHRONICLE examines what this development means for the broader industry landscape.',
+  'An editorial reflection on the week\'s most consequential K-pop stories.',
+  'What the headlines miss, and why the details matter more than they appear to.',
+  'A careful reading of the signals coming from inside the K-pop world this week.',
+  'The patterns are there for those who know where to look. This essay connects the dots.',
+  'Beyond the noise of the news cycle, quieter shifts are underway. We examine them here.',
+  'Industry analysis that goes past the surface to reveal what is really happening.',
+  'Cultural commentary on K-pop\'s evolving relationship with its global audience.',
+  'A nuanced perspective on how this moment fits into K-pop\'s larger story.',
+  'The editorial team unpacks the week\'s developments with depth and context.',
+  'Close observation reveals more than casual attention ever could. Here is what we found.',
+  'K-pop\'s current moment demands the kind of analysis that quick takes cannot provide.',
+  'An assessment of where things stand and where they might be headed next.',
+];
+let _excerptIndex = 0;
+
+function getUniqueExcerpt(article) {
+  const real = article.articleContent?.paragraphs?.[0]?.slice(0, 160);
+  if (real && real.length > 30) return real;
+  // Cycle through unique editorial excerpts
+  const excerpt = EDITORIAL_EXCERPTS[_excerptIndex % EDITORIAL_EXCERPTS.length];
+  _excerptIndex++;
+  return excerpt;
+}
+
 function generateEditorPickCard(article) {
   if (!article) return '';
   const topic = classifyTopic(article.originalTitle || article.title);
   const cat = displayCategory(topic);
-  const excerpt = article.articleContent?.paragraphs?.[0]?.slice(0, 160) || 'An essay exploring the deeper currents beneath the surface of the K-pop industry.';
+  const excerpt = getUniqueExcerpt(article);
   return `<li>
           <div class="ed-category">${escapeHtml(cat)}</div>
           <div class="ed-title"><a href="${escapeHtml(article.localUrl)}">${escapeHtml(article.title)}</a></div>
@@ -1074,11 +1227,27 @@ function generateEditorPickCard(article) {
         </li>`;
 }
 
+const INDUSTRY_EXCERPTS = [
+  'Industry analysis and market commentary from the CHRONICLE editorial team.',
+  'A data-driven examination of the business dynamics shaping K-pop\'s present and future.',
+  'Behind the numbers lies a story about strategy, adaptation, and ambition.',
+  'The industry metrics tell a compelling story when read in the proper context.',
+  'CHRONICLE breaks down the market forces at work in this week\'s developments.',
+  'An analytical look at how market pressures and creative decisions intersect.',
+  'What the quarterly data reveals about K-pop\'s evolving commercial landscape.',
+  'The business side of K-pop, examined with the rigor it deserves.',
+];
+let _industryExcerptIndex = 0;
+
 function generateIndustryCard(article) {
   if (!article) return '';
   const topic = classifyTopic(article.originalTitle || article.title);
   const cat = displayCategory(topic);
-  const excerpt = article.articleContent?.paragraphs?.[0]?.slice(0, 120) || 'Industry analysis and market commentary from the CHRONICLE editorial team.';
+  let excerpt = article.articleContent?.paragraphs?.[0]?.slice(0, 120);
+  if (!excerpt || excerpt.length < 30) {
+    excerpt = INDUSTRY_EXCERPTS[_industryExcerptIndex % INDUSTRY_EXCERPTS.length];
+    _industryExcerptIndex++;
+  }
   return `<div class="industry-item"><a href="${escapeHtml(article.localUrl)}">
         ${imgTag(article, 400, 267)}
         <div class="ind-label">${escapeHtml(cat)}</div>
@@ -1088,11 +1257,25 @@ function generateIndustryCard(article) {
       </a></div>`;
 }
 
+const CULTURE_QUOTES = [
+  'Cultural commentary and critical reflection on the world of K-pop.',
+  'An examination of how K-pop intersects with broader cultural narratives.',
+  'The cultural dimensions of this story reveal more than the surface suggests.',
+  'K-pop as a cultural phenomenon continues to challenge and reward serious inquiry.',
+  'How this moment in K-pop reflects and shapes the world beyond the stage.',
+  'A thoughtful meditation on what K-pop means in its current global context.',
+];
+let _cultureQuoteIndex = 0;
+
 function generateCultureCard(article) {
   if (!article) return '';
   const topic = classifyTopic(article.originalTitle || article.title);
   const cat = displayCategory(topic);
-  const pullquote = article.articleContent?.paragraphs?.[1]?.slice(0, 180) || 'Cultural commentary and critical reflection on the world of K-pop.';
+  let pullquote = article.articleContent?.paragraphs?.[1]?.slice(0, 180);
+  if (!pullquote || pullquote.length < 30) {
+    pullquote = CULTURE_QUOTES[_cultureQuoteIndex % CULTURE_QUOTES.length];
+    _cultureQuoteIndex++;
+  }
   return `<article><a href="${escapeHtml(article.localUrl)}">
         <div class="cult-img">${imgTag(article, 200, 150)}</div>
         <div class="cult-text">
@@ -1193,7 +1376,7 @@ async function generateArticlePages(allArticles, usedArticles) {
 
     let html = articleTemplate
       .replace(/\{\{ARTICLE_TITLE\}\}/g, escapeHtml(article.title))
-      .replace('{{ARTICLE_DESCRIPTION}}', escapeHtml(article.title).slice(0, 160))
+      .replace(/\{\{ARTICLE_DESCRIPTION\}\}/g, escapeHtml(article.title).slice(0, 160))
       .replace('{{ARTICLE_IMAGE}}', escapeHtml(heroImgSrc))
       .replace('{{ARTICLE_CATEGORY}}', escapeHtml(displayCategory(topic)))
       .replace('{{ARTICLE_DATE}}', escapeHtml(article.formattedDate))

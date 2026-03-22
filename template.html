@@ -61,6 +61,22 @@
     }
     .nav-links a:hover { color: #c1272d; }
 
+    .hamburger {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 8px;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .hamburger span {
+      display: block;
+      width: 20px;
+      height: 2px;
+      background: #333;
+    }
+
     /* -- Container -- */
     .container {
       max-width: 820px;
@@ -381,6 +397,21 @@
 
     /* -- Responsive -- */
     @media (max-width: 700px) {
+      .nav-links { display: none; }
+      .hamburger { display: flex; }
+      .nav-links.active {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 56px;
+        left: 0;
+        right: 0;
+        background: #faf8f0;
+        border-bottom: 1px solid #d4c9a8;
+        padding: 12px 20px;
+        z-index: 99;
+        gap: 8px;
+      }
       .hero-title { font-size: 26px; }
       .industry-grid { grid-template-columns: 1fr; }
       .culture-list article {
@@ -397,15 +428,18 @@
 <body>
 
   <!-- Navigation -->
-  <nav class="nav">
+  <nav class="nav" style="position:relative">
     <div class="nav-inner">
       <a href="index.html" class="nav-logo">Chronicle</a>
-      <div class="nav-links">
+      <div class="nav-links" id="navLinks">
         <a href="#essays">Essays</a>
         <a href="#industry">Industry</a>
         <a href="#culture">Culture</a>
         <a href="#archive">Archive</a>
       </div>
+      <button class="hamburger" id="hamburgerBtn" aria-label="Menu">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </nav>
 
@@ -469,6 +503,16 @@
       <div class="footer-copy">&copy; 2018&ndash;2026 CHRONICLE. All rights reserved.</div>
     </div>
   </footer>
+
+  <script>
+    var btn = document.getElementById('hamburgerBtn');
+    var nav = document.getElementById('navLinks');
+    if (btn && nav) {
+      btn.addEventListener('click', function() {
+        nav.classList.toggle('active');
+      });
+    }
+  </script>
 
 </body>
 </html>
