@@ -3,6 +3,8 @@ on:
   schedule:
     - cron: '0 16 * * *'
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   crawl-and-deploy:
     runs-on: ubuntu-latest
