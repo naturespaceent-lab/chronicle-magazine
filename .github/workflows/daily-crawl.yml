@@ -19,6 +19,6 @@ jobs:
         run: |
           git config user.name "Auto Crawler"
           git config user.email "crawler@bot.com"
-          git add -A
+          git add index.html articles/ images/
           git diff --staged --quiet || git commit -m "chore: daily crawl $(date +%Y-%m-%d)"
           git push
