@@ -22,14 +22,5 @@ jobs:
           git add -A
           git diff --staged --quiet || git commit -m "chore: daily crawl $(date +%Y-%m-%d)"
           git push
-      - name: Setup Wrangler Auth
-        run: |
-          mkdir -p ~/.config/.wrangler/config
-          cat > ~/.config/.wrangler/config/default.toml << EOF
-          oauth_token = "${{ secrets.CF_OAUTH_TOKEN }}"
-          expiration_time = "2020-01-01T00:00:00.000Z"
-          refresh_token = "${{ secrets.CF_REFRESH_TOKEN }}"
-          scopes = ["account:read", "user:read", "workers:write", "workers_kv:write", "workers_routes:write", "workers_scripts:write", "workers_tail:read", "d1:write", "pages:write", "zone:read", "ssl_certs:write", "offline_access"]
-          EOF
-      - name: Deploy to Cloudflare Pages
-        run: npx wrangler pages deploy . --project-name=chronicle-reads
+      - name: Deploy to Netlify
+        run: npx netlify-cli deploy --prod --dir=. --site=${{ secrets.NETLIFY_SITE_ID }} --auth=${{ secrets.NETLIFY_AUTH_TOKEN }}
