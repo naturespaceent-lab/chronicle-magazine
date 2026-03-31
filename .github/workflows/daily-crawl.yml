@@ -1,7 +1,7 @@
 name: Daily Crawl
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: '0 20 * * *'
   workflow_dispatch:
 permissions:
   contents: write
@@ -15,10 +15,20 @@ jobs:
           node-version: '22'
       - name: Run crawler
         run: node crawl.mjs
+      - name: Clean orphaned images
+        run: |
+          if [ -d images ]; then
+            referenced=$(grep -roh 'images/[^"'"'"' >)]*' index.html articles/ 2>/dev/null | sed 's|.*/images/||' | sort -u)
+            for f in images/*; do
+              [ -f "$f" ] || continue
+              fname=$(basename "$f")
+              echo "$referenced" | grep -qxF "$fname" || { echo "Removing orphan: $fname"; rm "$f"; }
+            done
+          fi
       - name: Commit updated files
         run: |
           git config user.name "Auto Crawler"
           git config user.email "crawler@bot.com"
-          git add index.html articles/ images/ _headers
+          git add -A index.html articles/ images/ _headers
           git diff --staged --quiet || git commit -m "chore: daily crawl $(date +%Y-%m-%d)"
           git push
